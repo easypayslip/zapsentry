@@ -107,10 +107,6 @@ func (c *core) unpackContext(clone *core, event *sentry.Event, hub *sentry.Hub) 
 		if orgID, ok := context["orgId"]; ok {
 			event.Tags["org_id"] = orgID.(string)
 		}
-
-		if stage, ok := context["stage"]; ok {
-			event.Environment = stage.(string)
-		}
 		
 		// don't want these 2 in additional info > context > X in Sentry
 		if requestInt, ok := context["request"]; ok {
