@@ -1,6 +1,7 @@
 package zapsentry
 
 import (
+	"net/http"
 	"strings"
 	"time"
 
@@ -51,6 +52,11 @@ func (c *core) Write(ent zapcore.Entry, fs []zapcore.Field) error {
 	event.Extra = clone.fields
 	event.Tags = c.cfg.Tags
 
+	hub := c.cfg.Hub
+	if hub == nil {
+		hub = sentry.CurrentHub()
+	}
+	
 	if !c.cfg.DisableStacktrace {
 		trace := sentry.NewStacktrace()
 		if trace != nil {
@@ -63,10 +69,7 @@ func (c *core) Write(ent zapcore.Entry, fs []zapcore.Field) error {
 		}
 	}
 
-	hub := c.cfg.Hub
-	if hub == nil {
-		hub = sentry.CurrentHub()
-	}
+	c.unpackContext(clone, event, hub)
 	_ = c.client.CaptureEvent(event, nil, hub.Scope())
 
 	// We may be crashing the program, so should flush any buffered events.
@@ -79,6 +82,51 @@ func (c *core) Write(ent zapcore.Entry, fs []zapcore.Field) error {
 func (c *core) Sync() error {
 	c.client.Flush(c.flushTimeout)
 	return nil
+}
+
+func (c *core) unpackContext(clone *core, event *sentry.Event, hub *sentry.Hub) {
+	var request *http.Request
+	if contextInt, ok := clone.fields["context"]; ok {
+		context := contextInt.(map[string]interface{})
+
+		if userID, ok := context["userId"]; ok {
+			event.User.ID = userID.(string)
+		}
+
+		if userEmail, ok := context["userEmail"]; ok {
+			event.User.Email = userEmail.(string)
+			event.Tags["user_email"] = userEmail.(string)
+		}
+
+		if method, ok := context["method"]; ok {
+			if path, ok := context["path"]; ok {
+				event.Tags["route"] = method.(string) + " " + path.(string)
+			}
+		}
+
+		if orgID, ok := context["orgId"]; ok {
+			event.Tags["org_id"] = orgID.(string)
+		}
+
+		if stage, ok := context["stage"]; ok {
+			event.Environment = stage.(string)
+		}
+		
+		// don't want these 2 in additional info > context > X in Sentry
+		if requestInt, ok := context["request"]; ok {
+			request = requestInt.(*http.Request)
+			delete(context, "request")  
+		}
+
+		if requestBody, ok := context["body"]; ok {
+			clone.fields["body"] = requestBody.(string)
+			delete(context, "body")
+		}
+	}
+
+	if request != nil {
+		hub.Scope().SetRequest(request)
+	}
 }
 
 func (c *core) with(fs []zapcore.Field) *core {
